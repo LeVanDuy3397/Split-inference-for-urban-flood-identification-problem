@@ -5,7 +5,7 @@ server:
     - 1
     - 1 
     - 1
-  model: yolov8n
+  model: yolov8_version1 # đây chính là tên file tham số cho model, phiên bản càng cao khả năng nhận diện của model càng được nâng lên
   batch-frame: 1 # chính là số khung hình xử lý đồng thời
 rabbit:
   address: 127.0.0.1

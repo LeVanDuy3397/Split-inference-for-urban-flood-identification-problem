@@ -13,7 +13,7 @@ from ultralytics.utils import ops
 
 
 class SplitDetectionModel(nn.Module):
-    def __init__(self, cfg=YOLO('yolov8n.pt').model, split_module1=-1, split_module2=-1):
+    def __init__(self, cfg, split_module1=-1, split_module2=-1):
         super().__init__()
         self.model = cfg.model
         self.save = cfg.save
@@ -39,7 +39,7 @@ class SplitDetectionModel(nn.Module):
 
         y = []  # là danh sách các đầu ra quan trọng cần lưu lại để truyền đến phần mid
         # duyệt qua từng module trong head, lấy chỉ số và module đó
-        for i, m in enumerate(self.head):
+        for _, m in enumerate(self.head):
             if m.f != -1:  # khác -1 là có đầu vào từ 1 hay nhiều module trước
                 x = y[m.f] if isinstance(m.f, int) else [
                     x if j == -1 else y[j] for j in m.f]
@@ -51,42 +51,46 @@ class SplitDetectionModel(nn.Module):
             # x từ module trước vào module hiện tại, điều này luôn đươc thực hiện vì các module liên tục nhau
             x = m(x)
             # kết quả: được x chính là dữ liệu đầu ra khi tensor qua module hiện tại
-
-            if (m.i in self.save) or (i in output_from):
-                # kiểm tra nếu module hiện tại nằm trong save là ds các module quan trọng cần lưu trữ dữ liệu đầu ra
-                # hoặc module hiện tại nằm trong ds các module quan trọng mà được chỉ định để lưu trữ dữ liệu đầu ra
-                # kết quả: lưu lại module vào ds y để sử dụng cho các module sau này
-                y.append(x)
-            else:
-                # nếu không nằm trong ds save và output_from thì tại chỉ số đó lưu lại là None
-                y.append(None)
-        # sau khi thoát khỏi vòng lặp trên thì sẽ được y chứa các dữ liệu đầu ra theo từng module để truyền đến phần mid
-        # x cuối cùng chính là đầu ra của module cuối cùng trong phần head, cũng nối liền với module đầu tiên trong phần mid
-
-        for mi in range(len(y)):  # duyệt qua từng module trong y
-            if mi not in output_from:  # nếu module đó không nằm trong ds các module mình cần lưu dữ liệu đầu ra thì None
-                y[mi] = None
-
-        if y[len(y) - 1] is None:
-            # lưu phần tử cuối bằng đầu ra của module cuối cùng trong head vì nó nối tiếp với module đầu tiên trong mid
-            y[len(y) - 1] = x
-
+            y.append(x if (m.i in self.save) else None)
+        if y[-1] is None:
+            y[-1] = x
         return {"modules_output": y, "last_modules_idx": len(y) - 1}
+        #     if (m.i in self.save) or (i in output_from):
+        #         # kiểm tra nếu module hiện tại nằm trong save là ds các module quan trọng cần lưu trữ dữ liệu đầu ra
+        #         # hoặc module hiện tại nằm trong ds các module quan trọng mà được chỉ định để lưu trữ dữ liệu đầu ra
+        #         # kết quả: lưu lại module vào ds y để sử dụng cho các module sau này
+        #         y.append(x)
+        #     else:
+        #         # nếu không nằm trong ds save và output_from thì tại chỉ số đó lưu lại là None
+        #         y.append(None)
+        # # sau khi thoát khỏi vòng lặp trên thì sẽ được y chứa các dữ liệu đầu ra theo từng module để truyền đến phần mid
+        # # x cuối cùng chính là đầu ra của module cuối cùng trong phần head, cũng nối liền với module đầu tiên trong phần mid
+
+        # for mi in range(len(y)):  # duyệt qua từng module trong y
+        #     if mi not in output_from:  # nếu module đó không nằm trong ds các module mình cần lưu dữ liệu đầu ra thì None
+        #         y[mi] = None
+
+        # if y[len(y) - 1] is None:
+        #     # lưu phần tử cuối bằng đầu ra của module cuối cùng trong head vì nó nối tiếp với module đầu tiên trong mid
+        #     y[len(y) - 1] = x
+
+        # return {"modules_output": y, "last_modules_idx": len(y) - 1}
         # kết quả: y là chứa các đầu ra của các module quan trọng, cái không quan trọng thì là None
         # và chỉ số của module cuối cùng ds y, thứ tự đầu đến cuối là cũng từ module 0 đến split_layer1-1
 
     # y là mảng có các chỉ số là các module quan trọng trong mid và head
 
-    def forward_mid(self, x):
+    def forward_mid(self, xdict):
         output_from = (4, 6, 9, 12, 15, 18)  # những module quan trọng
 
         # y bây giờ sẽ giống ds y phần head chứa đầu ra các module quan trọng trong head
-        y = x["modules_output"]
-        last_index = x["last_modules_idx"]
+        y = xdict["modules_output"]
+        x = y[xdict["last_modules_idx"]]
+        # last_index = x["last_modules_idx"]
         # x bây giờ chính là đầu ra nằm cuối trong ds y, cũng chính là của module nối liền với phần mid
-        x = y[last_index]
+        # x = y[last_index]
 
-        for i, m in enumerate(self.mid):
+        for _, m in enumerate(self.mid):
             if m.f != -1:  # khác -1 là có đầu vào từ 1 hay nhiều module trước
                 # x lưu đầu vào cho module hiện tại
                 x = y[m.f] if isinstance(m.f, int) else [
@@ -94,19 +98,23 @@ class SplitDetectionModel(nn.Module):
             # cho đầu vào x vào module hiện tại, điều này luôn được thực hiện vì các module liên tục nhau
             x = m(x)
             # nếu module hiện tại quan trọng thì lưu lại
-            if (m.i in self.save) or (i in output_from):
-                y.append(x)
-            else:
-                y.append(None)
-
-        for mi in range(len(y)):
-            if mi not in output_from:  # nếu module đó không quan trọng thì cho thành None
-                y[mi] = None
-
-        # kiểm tra phần tử cuối cùng rồi lưu lại bằng đầu ra của module cuối cùng trong mid
-        if y[len(y) - 1] is None:
-            y[len(y) - 1] = x
+            # if (m.i in self.save) or (i in output_from):
+            #     y.append(x)
+            # else:
+            #     y.append(None)
+            y.append(x if (m.i in self.save) else None)
+        if y[-1] is None:
+            y[-1] = x
         return {"modules_output": y, "last_modules_idx": len(y) - 1}
+
+        # for mi in range(len(y)):
+        #     if mi not in output_from:  # nếu module đó không quan trọng thì cho thành None
+        #         y[mi] = None
+
+        # # kiểm tra phần tử cuối cùng rồi lưu lại bằng đầu ra của module cuối cùng trong mid
+        # if y[len(y) - 1] is None:
+        #     y[len(y) - 1] = x
+        # return {"modules_output": y, "last_modules_idx": len(y) - 1}
 
     # x chính là đầu vào, x=model.forward_mid(x), qua tail cũng chính là tensor luôn
     def forward_tail(self, x):

@@ -72,20 +72,18 @@
     function showPoint(lat, lng, timestamp, prediction) {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const latLng = [lat, lng];
-      const text = `Thời gian: ${timestamp || '—'}<br>Dự đoán mức: ${prediction ?? '—'}`;
+      const text = `Thời gian: ${timestamp}<br>Dự đoán đang ngập ở mức: ${prediction+1}`;
       L.circle(latLng, {
         color: 'red',
         fillColor: '#f03',
         fillOpacity: 0.4,
-        radius: 10
+        radius: 15
       }).addTo(map).bindPopup(text);
 
-       // Tạo hoặc cập nhật marker
       if (!currentMarker) {
-        currentMarker = L.marker(latLng).addTo(map).bindPopup(text); // Gán popup cho marker
+        currentMarker = L.marker(latLng).addTo(map);
       } else {
         currentMarker.setLatLng(latLng);
-        currentMarker.bindPopup(text); // Cập nhật popup cho marker
       }
 
       pathLine.addLatLng(latLng);

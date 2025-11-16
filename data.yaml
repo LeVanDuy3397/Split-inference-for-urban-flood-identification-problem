@@ -1,0 +1,4 @@
+names: ['level1-0-20-', 'level2-20-45-', 'level3-45-100-', 'level4-100-']
+nc: 4
+train: "C:/Users/duylv/split_inference(DAKS)/dataset/train/images" 
+val: "C:/Users/duylv/split_inference(DAKS)/dataset/valid/images"

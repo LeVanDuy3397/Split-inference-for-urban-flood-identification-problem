@@ -9,6 +9,7 @@ import pika
 from src.Model import SplitDetectionPredictor
 import numpy as np
 import json
+from ultralytics.utils import ops
 
 
 def decode_image_base64_to_cv2(image_b64: str):
@@ -17,6 +18,40 @@ def decode_image_base64_to_cv2(image_b64: str):
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)  # BGR
     return img
+
+
+def letterbox_img(img_rgb, new_shape=640, color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
+    shape = img_rgb.shape[:2]  # (h,w)
+    if isinstance(new_shape, int):
+        new_shape = (new_shape, new_shape)
+
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    if not scaleup:
+        r = min(r, 1.0)
+
+    new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
+    if auto:
+        dw, dh = np.mod(dw, stride), np.mod(dh, stride)
+    elif scaleFill:
+        new_unpad = (new_shape[1], new_shape[0])
+        r = (new_shape[1] / shape[1], new_shape[0] / shape[0])
+        dw, dh = 0, 0
+
+    dw /= 2
+    dh /= 2
+    if shape[::-1] != new_unpad:
+        img_resized = cv2.resize(
+            img_rgb, new_unpad, interpolation=cv2.INTER_LINEAR)
+    else:
+        img_resized = img_rgb
+
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    img_padded = cv2.copyMakeBorder(img_resized, top, bottom, left, right,
+                                    cv2.BORDER_CONSTANT, value=color)
+    ratio = (r, r)
+    return img_padded, ratio, (dw, dh)
 
 
 class Scheduler:  # mục đích là tính thời gian inference trên từng phần head, mid, tail, sắp xếp giao tiếp các client với nhau và với server
@@ -89,24 +124,46 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                     return
                 elif img_bgr is not None:
                     print("shape:", img_bgr.shape)
-                frame = cv2.resize(img_bgr, (640, 640))
-                tensor = torch.from_numpy(frame).float().permute(2, 0, 1)
-                tensor /= 255.0
-                list_average_tensor = []
-                list_average_tensor.append(tensor)
-                reference_tensor = torch.stack(list_average_tensor)
-                reference_tensor = reference_tensor.to(self.device)
-                predictor.setup_source(reference_tensor)
-                for predictor.batch in predictor.dataset:
-                    path, average_tensor, _ = predictor.batch
-                preprocess_image = predictor.preprocess(average_tensor)
+                img0 = img_bgr
+                img_rgb = cv2.cvtColor(img0, cv2.COLOR_BGR2RGB)
+                # LetterBox giống Ultralytics
+                img_lb, ratio, (dw, dh) = letterbox_img(
+                    img_rgb, new_shape=640, auto=True, scaleFill=False, scaleup=True, stride=32
+                )
+
+                im = img_lb.transpose((2, 0, 1)).astype(
+                    np.float32) / 255.0  # CHW
+                im = np.ascontiguousarray(im)
+                im = torch.from_numpy(im).unsqueeze(
+                    0).to(self.device)        # (1,3,h,w)
+
+                # Lưu thông tin scale để tail dùng
+                meta = {
+                    "im_shape": im.shape,
+                    "orig_shape": img0.shape,   # BGR gốc
+                    "ratio": ratio,
+                    "pad": (dw, dh),
+                }
+                # frame = cv2.resize(img_bgr, (640, 640))
+                # tensor = torch.from_numpy(frame).float().permute(2, 0, 1)
+                # tensor /= 255.0
+                # list_average_tensor = []
+                # list_average_tensor.append(tensor)
+                # reference_tensor = torch.stack(list_average_tensor)
+                # reference_tensor = reference_tensor.to(self.device)
+                # predictor.setup_source(reference_tensor)
+                # for predictor.batch in predictor.dataset:
+                #     path, average_tensor, _ = predictor.batch
+                # preprocess_image = predictor.preprocess(average_tensor)
+
                 start = time.time()
                 # # chạy trên phần head
                 # # kết quả chính là dạng key-value
-                y = model.forward_head(preprocess_image)
-
+                y = model.forward_head(im)
                 time_inference += (time.time() - start)
 
+                # gửi kèm meta qua queue
+                y["meta"] = meta
                 self.send_next_part(self.intermediate_queue, y, logger)
 
                 y = 'STOP'
@@ -298,12 +355,15 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                 received_data = pickle.loads(body)
                 if received_data != 'STOP':
                     y = received_data["data"]  # chính là đầu ra dạng key-value
+                    meta = y.get("meta", None)  # giữ lại
                     # key này chính là đầu ra
                     y["modules_output"] = [
                         t.to(self.device) if t is not None else None for t in y["modules_output"]]
                     start = time.time()
                     # chạy trên phần mid
                     y = model.forward_mid(y)  # kết quả chính là dạng key-value
+                    if "meta" in received_data["data"]:
+                        y["meta"] = received_data["data"]["meta"]
 
                     time_inference += (time.time() - start)
 
@@ -347,6 +407,7 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                 received_data = pickle.loads(body)
                 if received_data != 'STOP':
                     y = received_data["data"]  # chính là đầu ra dạng key-value
+                    meta = y.get("meta", None)
                     # key này chính là đầu ra
                     y["modules_output"] = [
                         t.to(self.device) if t is not None else None for t in y["modules_output"]]
@@ -362,6 +423,7 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                     # chạy trên phần tail
                     # kết quả chính là tensor đầu ra của model
                     predictions = model.forward_tail(y)
+                    meta = y.get("meta", None)
                     # cái dự đoán này là cho từng frame tức là dự đoán cho từng khung hình trong video và nó có 3 scale khác nhau, chứ không phải cả video
 
                     # chạy hậu xử lý từ kết quả đầu ra của model, tức là xem kết quả đầu ra
@@ -372,19 +434,13 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                     time_inference += (time.time() - start)
                     pbar.update(batch_frame)  # cập nhật rồi hiển thị thanh %
                     # vẫn đóng gói dữ liệu lần cuối
-                    message = pickle.dumps(predictions)
-                    self.channel.basic_publish(  # sau đó lại xuất vào hàng đợi đó tiếp, tương ứng với layer_id
-                        exchange='',
-                        routing_key='prediction_queue',
-                        body=message,
-                    )
+                    message = pickle.dumps((predictions, meta))
+                    self.channel.basic_publish(
+                        exchange='', routing_key='prediction_queue', body=message)
                 else:
                     message = pickle.dumps(received_data)
                     self.channel.basic_publish(
-                        exchange='',
-                        routing_key='prediction_queue',
-                        body=message,
-                    )
+                        exchange='', routing_key='prediction_queue', body=message)
                     break
             else:
                 continue

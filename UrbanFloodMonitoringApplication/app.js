@@ -177,7 +177,7 @@ app.post('/api/broadcast-stored', async (req, res) => {
 const HTTP_PORT = process.env.PORT || 3000;
 const HTTPS_PORT = process.env.HTTPS_PORT || 3001;
 app.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log('HTTP at http://192.168.1.6:' + HTTP_PORT);
+  console.log('HTTP at http://192.168.1.7:' + HTTP_PORT);
 });
 
 // Tải cert tự ký
@@ -187,6 +187,6 @@ const sslOptions = {
 };
 
 https.createServer(sslOptions, app).listen(HTTPS_PORT, '0.0.0.0', () => {
-  console.log('HTTPS at https://192.168.1.6:' + HTTPS_PORT);
+  console.log('HTTPS at https://192.168.1.7:' + HTTPS_PORT);
 });
 

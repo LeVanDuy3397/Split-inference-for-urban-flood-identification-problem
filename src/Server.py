@@ -16,6 +16,24 @@ import json
 import base64
 
 
+def display_top_5_scores(p0):
+    if torch.is_tensor(p0) and p0.ndim == 3:
+        # Tách các thông số từ tensor p0
+        scores = p0[:, 4:8, :]  # Lấy 4 thông số score cuối cùng
+
+        # Lặp qua từng class id (0 đến 3)
+        for class_id in range(4):
+            # Lấy 5 score cao nhất của class id hiện tại
+            top_5_scores, _ = torch.topk(scores[:, class_id, :], 5, dim=-1)
+
+            # In ra kết quả
+            print(f"Top 5 scores for class {class_id}:")
+            print(top_5_scores.squeeze())
+            print()
+    else:
+        print("Input tensor is not valid.")
+
+
 class Server:
     def __init__(self, config):
         # RabbitMQ
@@ -117,7 +135,10 @@ class Server:
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def receive_predict(self, ch, method, props, body):
-        preds = pickle.loads(body)
+        packet = pickle.loads(body)
+        # tail gửi về (predictions, meta)
+        preds, meta = (packet if isinstance(packet, tuple)
+                       and len(packet) == 2 else (packet, None))
 
         if not isinstance(preds, (list, tuple)) or len(preds) < 2:
             print(
@@ -127,10 +148,11 @@ class Server:
             print("====================================")
             return
         # lấy phần tử đầu tiên trong preds đây mới là tensor dự đoán thô
-        p0 = preds[0]
+        p0 = preds[0] if isinstance(preds, (list, tuple)) else preds
         if torch.is_tensor(p0) and p0.ndim == 3:
             print(
                 f"- Prediction thô trước khi qua NMS: ={p0.shape}, dtype={p0.dtype}, device={p0.device}")
+            display_top_5_scores(p0)
             with torch.no_grad():
                 nms_out = ops.non_max_suppression(
                     prediction=p0,
@@ -140,10 +162,18 @@ class Server:
                     agnostic=False,
                     multi_label=False,
                     max_det=300,
-                    nc=80,
+                    nc=4,
                 )
             det = nms_out[0]  # lấy phần tử đầu tiên trong danh sách nms_out
             # đầu ra là tensor 2D [M, 6], M là số box còn lại sau NMS, 6 là 4 tọa độ box + conf + class
+            # scale_boxes chính xác
+            if det is not None and len(det) and meta is not None:
+                im_shape = meta["im_shape"]      # (1,3,h,w)
+                orig_shape = meta["orig_shape"]  # (H,W,3)
+                det[:, :4] = ops.scale_boxes(
+                    im_shape[2:], det[:, :4], orig_shape).round()
+                det[:, :4].clamp_(min=0)
+
             print(
                 f"- Tensor sau khi đi qua NMS: ={det.shape}, dtype={det.dtype}, device={det.device}")
             self.add_prediction(det)
@@ -155,7 +185,7 @@ class Server:
                 print(
                     f"- Id class của box {i+1}: {det[i, 5].item():.6f}")
 
-            # vẽ hộp bao quanh các đối tượng được phát hiện và lưu thành 1 bản sao
+            # # vẽ hộp bao quanh các đối tượng được phát hiện và lưu thành 1 bản sao
             CUR_DIR = os.path.dirname(os.path.abspath(__file__))
             image_path = os.path.join(CUR_DIR, "img1.jpg")
             orig_img = cv2.imread(image_path)
