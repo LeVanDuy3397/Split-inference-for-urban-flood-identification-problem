@@ -4,7 +4,7 @@ Web (Client) sẽ bóc tách video đầu vào thành các frame còn nếu là 
 ## Model
 ![sl_model](pics/Model_Urban_Flood_Identification_Problem.jpg)
 
-## Required Packages
+## Install the AI ​​model side packages
 ```
 certifi            2025.11.12
 matplotlib         3.10.7
@@ -19,6 +19,18 @@ ultralytics        8.3.228
 ultralytics-thop   2.0.18 
 urllib3            2.5.0 
 ```
+
+## Install web-side packages
+```
+  amqplib       0.10.9
+  body-parser   2.2.0
+  cors          2.8.5
+  dotenv        17.2.3
+  ejs           3.1.10
+  express       5.1.0
+  multer        2.0.2
+```
+
 # split_inference
 
 ## Configuration
