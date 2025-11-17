@@ -95,25 +95,66 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                 body=message,
             )
 
-    # mục đích là lấy video đầu vào, rồi cho chạy qua head
-
-    def inference_head(self, model, data, batch_frame, logger):
-
-        time_inference = 0  # thời gian inference
-        i = 1
-        count = 0
-        similarity_tensor = []
-        # đây là lớp đưa đầu ra của model vào để xử lý
-        predictor = SplitDetectionPredictor(model, overrides={"imgsz": 640})
-
-        model.eval()
-        model.to(self.device)
-        self.channel.queue_declare(queue='image_queue', durable=True)
-        self.channel.basic_qos(prefetch_count=50)
+    def inference_frame_next(self, previous_body, model, logger, time_inference, signal_start):
         while True:
+            if previous_body is not None:
+                payload = json.loads(previous_body.decode('utf-8'))
+                img_bgr = decode_image_base64_to_cv2(
+                    payload['image_base64'])
+                if img_bgr is None:
+                    print("Không decode được ảnh.")
+                    self.channel.basic_ack(
+                        delivery_tag=method_frame.delivery_tag)
+                    return
+                elif img_bgr is not None:
+                    print("shape:", img_bgr.shape)
+                img0 = img_bgr
+                img_rgb = cv2.cvtColor(img0, cv2.COLOR_BGR2RGB)
+                # LetterBox giống Ultralytics
+                img_lb, ratio, (dw, dh) = letterbox_img(
+                    img_rgb, new_shape=640, auto=True, scaleFill=False, scaleup=True, stride=32
+                )
+
+                im = img_lb.transpose((2, 0, 1)).astype(
+                    np.float32) / 255.0  # CHW
+                im = np.ascontiguousarray(im)
+                im = torch.from_numpy(im).unsqueeze(
+                    0).to(self.device)        # (1,3,h,w)
+
+                # Lưu thông tin scale để tail dùng
+                meta = {
+                    "im_shape": im.shape,
+                    "orig_shape": img0.shape,   # BGR gốc
+                    "ratio": ratio,
+                    "pad": (dw, dh),
+                }
+                # frame = cv2.resize(img_bgr, (640, 640))
+                # tensor = torch.from_numpy(frame).float().permute(2, 0, 1)
+                # tensor /= 255.0
+                # list_average_tensor = []
+                # list_average_tensor.append(tensor)
+                # reference_tensor = torch.stack(list_average_tensor)
+                # reference_tensor = reference_tensor.to(self.device)
+                # predictor.setup_source(reference_tensor)
+                # for predictor.batch in predictor.dataset:
+                #     path, average_tensor, _ = predictor.batch
+                # preprocess_image = predictor.preprocess(average_tensor)
+
+                start = time.time()
+                # # chạy trên phần head
+                # # kết quả chính là dạng key-value
+                y = model.forward_head(im)
+                time_inference += (time.time() - start)
+
+                # gửi kèm meta qua queue
+                y["meta"] = meta
+                self.send_next_part(self.intermediate_queue, y, logger)
+                previous_body = None
+
             method_frame, _, body = self.channel.basic_get(
                 queue='image_queue', auto_ack=True)
-            if body:
+            if body is not None:
+                signal_start = 1
                 payload = json.loads(body.decode('utf-8'))
                 img_bgr = decode_image_base64_to_cv2(
                     payload['image_base64'])
@@ -166,12 +207,34 @@ class Scheduler:  # mục đích là tính thời gian inference trên từng ph
                 y["meta"] = meta
                 self.send_next_part(self.intermediate_queue, y, logger)
 
-                y = 'STOP'
-                self.send_next_part(self.intermediate_queue, y, logger)
-                logger.log_info(f"End Inference Head.")
-                return time_inference
             else:
-                continue
+                if signal_start == 0:
+                    continue
+                time.sleep(3)
+                method_frame, _, body = self.channel.basic_get(
+                    queue='image_queue', auto_ack=True)
+                if body is not None:
+                    self.inference_frame_next(
+                        body, model, logger, time_inference, signal_start)
+                else:
+                    y = 'STOP'
+                    self.send_next_part(self.intermediate_queue, y, logger)
+                    logger.log_info(f"End Inference Head.")
+                    return time_inference
+
+    # mục đích là lấy video đầu vào, rồi cho chạy qua head
+    def inference_head(self, model, data, batch_frame, logger):
+
+        time_inference = 0  # thời gian inference
+        # đây là lớp đưa đầu ra của model vào để xử lý
+        predictor = SplitDetectionPredictor(model, overrides={"imgsz": 640})
+        signal_start = 0
+        model.eval()
+        model.to(self.device)
+        self.channel.queue_declare(queue='image_queue', durable=True)
+        self.channel.basic_qos(prefetch_count=50)
+        return self.inference_frame_next(None, model, logger, time_inference, signal_start)
+
         # liên tục nhận dữ liệu từ web xuống
         # path = None
         # data_path = data

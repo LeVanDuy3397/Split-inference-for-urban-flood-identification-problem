@@ -16,24 +16,6 @@ import json
 import base64
 
 
-def display_top_5_scores(p0):
-    if torch.is_tensor(p0) and p0.ndim == 3:
-        # Tách các thông số từ tensor p0
-        scores = p0[:, 4:8, :]  # Lấy 4 thông số score cuối cùng
-
-        # Lặp qua từng class id (0 đến 3)
-        for class_id in range(4):
-            # Lấy 5 score cao nhất của class id hiện tại
-            top_5_scores, _ = torch.topk(scores[:, class_id, :], 5, dim=-1)
-
-            # In ra kết quả
-            print(f"Top 5 scores for class {class_id}:")
-            print(top_5_scores.squeeze())
-            print()
-    else:
-        print("Input tensor is not valid.")
-
-
 class Server:
     def __init__(self, config):
         # RabbitMQ
@@ -144,12 +126,23 @@ class Server:
 
         if not isinstance(preds, (list, tuple)) or len(preds) < 2:
             print(
-                f"- preds không phải list>=2, type={type(preds).__name__}, content={preds}")
+                f"- preds cuối cùng nhận được chính là tín hiệu kết thúc mà tail gửi về, type={type(preds).__name__}, tín hiệu kết thúc là: {preds}")
             if len(self.predictions) > 0:
-                pred = self.predictions[0]
-                class_ids = pred[:, 5].long()
-                unique_class_ids = torch.unique(class_ids).tolist()
-                # sẽ là 1 list chứa các class id
+                print(
+                    f"số lượng mảng chứa các dự đoán của từng frame là: {len(self.predictions)}")
+
+                # lấy mảng chứa các dự đoán của frame đầu tiên trong video hoặc của 1 ảnh
+                for i in range(len(self.predictions)):
+                    pred = self.predictions[i]
+                    class_ids = pred[:, 5].long()
+
+                    # lấy các class id chứa dự đoán các mức ngập, sẽ là 1 list chứa các class id
+                    unique_class_ids = torch.unique(class_ids).tolist()
+
+                    print(
+                        f"Danh sách các dự đoán mức ngập của frame {i+1} là: {unique_class_ids}")
+
+                # lấy danh sách các mức ngập của frame cuối cùng trong video
                 self.add_processed_prediction(unique_class_ids)
             ch.basic_ack(delivery_tag=method.delivery_tag)
             print("====================================")
@@ -159,11 +152,10 @@ class Server:
         if torch.is_tensor(p0) and p0.ndim == 3:
             print(
                 f"- Prediction thô trước khi qua NMS: ={p0.shape}, dtype={p0.dtype}, device={p0.device}")
-            display_top_5_scores(p0)
             with torch.no_grad():
                 nms_out = ops.non_max_suppression(
                     prediction=p0,
-                    conf_thres=0.20,  # nếu conf của box <0.25 thì bỏ qua không xét đến vì chỉ xét conf từ đó lên
+                    conf_thres=0.20,  # nếu conf của box <0.20 thì bỏ qua không xét đến vì chỉ xét conf từ đó lên
                     iou_thres=0.45,  # nếu iou giữa 2 box >0.45 thì coi như trùng box nên bỏ bớt 1 box đi
                     classes=None,
                     agnostic=False,
