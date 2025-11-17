@@ -2,7 +2,7 @@
 Web (Client) sẽ bóc tách video đầu vào thành các frame còn nếu là ảnh thì chính là 1 frame, sau đó gửi từng frame về thông qua Fetch cho Server của Web lấy rồi gửi qua hàng đợi thông qua RabbitMQ, phía sau Client 1 của model AI thông qua RabbitMQ sẽ liên tục lên hàng đợi đó lấy từng frame về và chạy inference luôn rồi truyền cho Client 2 thông qua RabbitMQ rồi Client 3 thông qua RabbitMQ sẽ gửi dự đoán về theo từng mảng cho Server của model AI xử lý (mỗi frame sẽ tương ứng với 1 mảng chứa các dự đoán), sau đó trên Web (Client) sẽ gửi vị trí ghi nhận dữ liệu thông qua Fetch về cho Server của Web lấy rồi gửi lên hàng đợi thông qua RabbitMQ, Server của model AI thông qua RabbitMQ lên hàng đợi đó lấy về, sau đó xử lý dữ liệu dự đoán cùng dữ liệu tại vị trí đó, rồi thông qua RabbitMQ gửi lên hàng đợi để Server của Web thông qua RabbitMQ lấy về rồi gửi qua SSE cho Web (Client) lấy rồi hiển thị lên bản đồ.
 
 ## Model
-![sl_model](pics/Model_Urban_Flood_Identification.jpg)
+![sl_model](pics/Model_Urban_Flood_Identification_Problem.jpg)
 
 ## Required Packages
 ```
